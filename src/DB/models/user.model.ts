@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import {
   MongooseModule,
   Prop,
@@ -7,8 +8,28 @@ import {
 } from '@nestjs/mongoose';
 import { HydratedDocument, models } from 'mongoose';
 import { GenderEnum, ProviderEnum, RoleEnum } from 'src/common/enums/user.enum';
+import { emailEvent } from 'src/common/events/sendEmail.event';
 import { hashText } from 'src/common/utils/security/hash.utils';
+import { generateOTP } from 'src/common/utils/security/otp.utils';
 
+@Schema()
+export class Otp {
+  @Prop({
+    type: String,
+    required: true,
+  })
+  otp: string;
+  @Prop({
+    type: Date,
+    required: true,
+  })
+  expireAt: Date;
+  @Prop({
+    type: Date,
+    required: true,
+  })
+  createdAt: Date;
+}
 @Schema({
   timestamps: true,
   toJSON: { virtuals: true },
@@ -59,15 +80,9 @@ export class User {
   confirmEmail: Date;
 
   @Prop({
-    type: {
-      otp: String,
-      expireAt: Date,
-    },
+    type: Otp,
   })
-  confirmEmailOTP: {
-    otp: string;
-    expireAt: Date;
-  };
+  confirmEmailOTP: Otp;
 
   @Prop({
     type: String,
@@ -125,13 +140,44 @@ export class User {
     default: ProviderEnum.LOCAL,
   })
   privider: string;
+
+  generateConfirmEmailOTP: () => Promise<void>;
 }
 
 export const userSchema = SchemaFactory.createForClass(User);
 
+userSchema.methods.generateConfirmEmailOTP = async function () {
+  if (this.confirmEmailOTP?.createdAt > new Date(Date.now() - 1 * 60 * 1000))
+    throw new BadRequestException(
+      'OTP request too frequent. Please try again later.',
+    );
+  const otp = generateOTP();
+  this.confirmEmailOTP = {
+    otp,
+    expireAt: new Date(Date.now() + 10 * 60 * 1000),
+    createdAt: new Date(),
+  };
+  emailEvent.emit('confirmEmail', {
+    to: this.email,
+    otp,
+    name: this.fullName,
+  });
+};
+userSchema.pre('save', async function (next) {
+  if (this.isNew) {
+    this.generateConfirmEmailOTP();
+  }
+  next();
+});
+
 userSchema.pre('save', async function (next) {
   if (this.isModified('password')) {
     this.password = await hashText({ text: this.password });
+  }
+  if (this.isModified('confirmEmailOTP')) {
+    this.confirmEmailOTP.otp = await hashText({
+      text: this.confirmEmailOTP.otp,
+    });
   }
   next();
 });

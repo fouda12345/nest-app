@@ -17,5 +17,5 @@ export async function compareText({
   text: string;
   hash: string;
 }): Promise<boolean> {
-  return await bcrypt.compare(text, hash);
+  return bcrypt.compare(text, hash);
 }
